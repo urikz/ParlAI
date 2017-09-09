@@ -17,6 +17,7 @@
 
 from parlai.core.agents import Agent
 from drqa import retriever
+from numpy.random import choice
 
 
 class IrkvBaselineAgent(Agent):
@@ -34,8 +35,9 @@ class IrkvBaselineAgent(Agent):
     def __init__(self, opt, shared=None):
         super().__init__(opt)
         self.id = 'IRKVBaselineAgent'
-        self.ranker = retriever.get_class('tfidf')(tfidf_path=opt['tfidf_path'])
-        self.db = retriever.get_class('sqlite')(db_path=opt['docdb-path'])
+        self.ranker = retriever.get_class('tfidf')(tfidf_path=opt['tfidf_path'],
+                                                   strict=False)
+        self.db = retriever.get_class('sqlite')(db_path=opt['docdb_path'])
 
     # def observe(self, obs):
     #     self.observation = obs
@@ -47,10 +49,41 @@ class IrkvBaselineAgent(Agent):
         reply['id'] = self.getID()
 
         if 'text' in obs:
-            doc_ids, doc_scores = self.ranker.closest_docs(obs['text'], 1)
-            reply['text_candidates'] = [
-                self.db.get_doc_value(did) for did in doc_ids]
-            reply['text'] = reply['text_candidates'][0]
+            doc_ids, doc_scores = self.ranker.closest_docs(obs['text'], 30)
+            total = sum(doc_scores)
+            if len(doc_ids) == 0:
+                reply['text'] = choice([
+                    'Can you say something more interesting?',
+                    'Why are you being so short with me?',
+                    'What are you really thinking?',
+                    'Can you expand on that?',
+                ])
+            else:
+                doc_scores = [d / total for d in doc_scores]
+                pick = choice(doc_ids, p=doc_scores)
+                reply['text_candidates'] = [
+                    self.db.get_doc_value(did) for did in doc_ids]
+                text = self.db.get_doc_value(pick)
+                if len(text) > 100:
+                    # shrink it a bit so it's not too long to read
+                    idx = text.rfind('.', 10, 125)
+                    if idx > 0:
+                        text = text[:idx + 1]
+                    else:
+                        idx = text.rfind('?', 10, 125)
+                        if idx > 0:
+                            text = text[:idx + 1]
+                        else:
+                            idx = text.rfind('!', 10, 125)
+                            if idx > 0:
+                                text = text[:idx + 1]
+                            else:
+                                idx = text.rfind(' ', 0, 75)
+                                if idx > 0:
+                                    text = text[:idx]
+                                else:
+                                    text = text[:50]
+                reply['text'] = text
 
         return reply
 
