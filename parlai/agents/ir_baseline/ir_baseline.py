@@ -126,6 +126,7 @@ class IrBaselineAgent(Agent):
             self.dictionary.act()
 
         obs = self.observation
+        print(obs['text'])
         reply = {}
         reply['id'] = self.getID()
 

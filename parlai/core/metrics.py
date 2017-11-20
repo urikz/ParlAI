@@ -111,6 +111,7 @@ class Metrics(object):
         # If any of them is a label then score a point.
         # maintain hits@1, 5, 10, 50, 100,  etc.
         label_set = set(_normalize_answer(l) for l in labels)
+
         cnts = {k: 0 for k in self.eval_pr}
         cnt = 0
         for c in text_cands:
@@ -119,6 +120,7 @@ class Metrics(object):
                 for k in self.eval_pr:
                     if cnt <= k:
                         cnts[k] += 1
+
         # hits metric is 1 if cnts[k] > 0.
         # (other metrics such as p@k and r@k take
         # the value of cnt into account.)
