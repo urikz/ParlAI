@@ -314,6 +314,7 @@ def create_agent(opt):
     """
     if opt.get('model'):
         model_class = get_agent_module(opt['model'])
+        print("creating: " + str(model_class))
         return model_class(opt)
     else:
         raise RuntimeError('Need to set `model` argument to use create_agent.')

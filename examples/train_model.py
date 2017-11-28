@@ -133,10 +133,14 @@ def main(parser):
             world.parley()
             parleys += 1
 
-            if opt['num_epochs'] > 0 and parleys >= max_parleys:
-                print('[ num_epochs completed:{}  time elapsed:{}s ]'.format(
-                    opt['num_epochs'], train_time.time()))
+            if world.epoch_done():
+                print('[ wnum_epochs completed:{} episodes:{} parleys:{} time elapsed:{}s ]'.format(
+                        opt['num_epochs'], parleys, parleys, train_time.time()))
                 break
+            #if opt['num_epochs'] > 0 and parleys >= max_parleys:
+            #    print('[ num_epochs completed:{}  time elapsed:{}s ]'.format(
+            #        opt['num_epochs'], train_time.time()))
+            #    break
             if opt['max_train_time'] > 0 and train_time.time() > opt['max_train_time']:
                 print('[ max_train_time elapsed:{}s ]'.format(train_time.time()))
                 break
@@ -212,8 +216,10 @@ def main(parser):
         # reload best validation model
         agent = create_agent(opt)
 
+    # agent = create_agent(opt)
+
     run_eval(agent, opt, 'valid', write_log=True)
-    run_eval(agent, opt, 'test', write_log=True)
+    #run_eval(agent, opt, 'test', write_log=True)
 
 
 if __name__ == '__main__':
