@@ -263,7 +263,7 @@ class StarspaceAgent(Agent):
             pred = self.model(xs, ys, self.ys_cache)
             loss = self.criterion(pred, Variable(torch.LongTensor([0])))
             self.update_metrics(pred.data)
-            #loss.backward()
+            loss.backward()
             self.update_params()
             return [{}]
         else:
