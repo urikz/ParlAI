@@ -6,7 +6,7 @@
 
 from parlai.core.agents import Agent
 from parlai.core.dict import DictionaryAgent
-from .modules import Seq2seq
+from .modules import Starspace
 
 import torch
 from torch.autograd import Variable
@@ -15,11 +15,12 @@ import torch.nn as nn
 
 from collections import deque
 
+import copy
 import os
 import random
+import math
 
-
-class Seq2seqAgent(Agent):
+class StarspaceAgent(Agent):
     """Simple implementation of the starspace algorithm: https://arxiv.org/abs/1709.03856
     """
 
@@ -42,50 +43,49 @@ class Seq2seqAgent(Agent):
     @staticmethod
     def add_cmdline_args(argparser):
         """Add command-line arguments specifically for this agent."""
-        Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
+        StarspaceAgent.dictionary_class().add_cmdline_args(argparser)
         agent = argparser.add_argument_group('StarSpace Arguments')
         agent.add_argument('-esz', '--embeddingsize', type=int, default=128,
                            help='size of the token embeddings')
         agent.add_argument('-lr', '--learningrate', type=float, default=0.005,
                            help='learning rate')
-        agent.add_argument('-opt', '--optimizer', default='adam',
-                           choices=Seq2seqAgent.OPTIM_OPTS.keys(),
+        agent.add_argument('-opt', '--optimizer', default='sgd',
+                           choices=StarspaceAgent.OPTIM_OPTS.keys(),
                            help='Choose between pytorch optimizers. '
                                 'Any member of torch.optim is valid and will '
                                 'be used with default params except learning '
                                 'rate (as specified by -lr).')
-        agent.add_argument('-hist', '--history-length', default=-1, type=int,
+        agent.add_argument('-hist', '--history-length', default=1, type=int,
                            help='Number of past utterances to remember. '
-                                'These include self-utterances. Default '
-                                'remembers entire episode history.')
+                                'These include self-utterances. Default 1.')
+        agent.add_argument('-tr', '--truncate', type=int, default=-1,
+                           help='truncate input & output lengths to speed up '
+                           'training (may reduce accuracy). This fixes all '
+                           'input and output to have a maximum length.')
+        agent.add_argument('-k', '--neg-samples', type=int, default=50,
+                           help='number k of negative samples per example')
 
     def __init__(self, opt, shared=None):
         """Set up model if shared params not set, otherwise no work to do."""
         super().__init__(opt, shared)
 
+        self.reset_metrics()
         # all instances needs truncate param
+        self.NULL_IDX = 0
+        self.ys_cache = []
+        self.ys_cache_sz = opt['neg_samples']
         self.truncate = opt['truncate'] if opt['truncate'] > 0 else None
         self.history = deque(maxlen=(
             opt['history_length'] if opt['history_length'] > 0 else None))
         if shared:
             # set up shared properties
             self.dict = shared['dict']
-            self.START_IDX = shared['START_IDX']
-            self.END_IDX = shared['END_IDX']
             # answers contains a batch_size list of the last answer produced
             self.answers = shared['answers']
         else:
             # this is not a shared instance of this class, so do full init
-
             # answers contains a batch_size list of the last answer produced
-            self.answers = [None] * opt['batchsize']
-
-            # check for cuda
-            self.use_cuda = not opt.get('no_cuda') and torch.cuda.is_available()
-            if self.use_cuda:
-                print('[ Using CUDA ]')
-                torch.cuda.set_device(opt['gpu'])
-
+            self.answers = [None] * 1
             states = {}
             if opt.get('model_file') and os.path.isfile(opt['model_file']):
                 # load model parameters if available
@@ -100,43 +100,24 @@ class Seq2seqAgent(Agent):
 
             # load dictionary and basic tokens & vectors
             self.dict = DictionaryAgent(opt)
-            self.id = 'Seq2Seq'
-            # we use START markers to start our output
-            self.START_IDX = self.dict[self.dict.start_token]
-            # we use END markers to end our output
-            self.END_IDX = self.dict[self.dict.end_token]
-            # get index of null token from dictionary (probably 0)
-            self.NULL_IDX = self.dict.txt2vec(self.dict.null_token)[0]
-
-            self.model = Seq2seq(opt, len(self.dict),
-                                 padding_idx=self.NULL_IDX,
-                                 start_idx=self.START_IDX,
-                                 end_idx=self.END_IDX,
-                                 longest_label=states.get('longest_label', 1))
-
-            # store important params in self
-            self.rank = opt['rank_candidates']
-            self.lm = opt['language_model']
+            self.id = 'Starspace'
+            self.model = Starspace(opt, len(self.dict))
 
             # set up tensors once
             self.xs = torch.LongTensor(1, 1)
             self.ys = torch.LongTensor(1, 1)
-            if self.rank:
-                self.cands = torch.LongTensor(1, 1, 1)
+            self.cands = torch.LongTensor(1, 1, 1)
 
             # set up modules
-            self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX)
+            self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
 
             if states:
                 # set loaded states if applicable
                 self.model.load_state_dict(states['model'])
 
-            if self.use_cuda:
-                self.cuda()
-
             # set up optimizer
             lr = opt['learningrate']
-            optim_class = Seq2seqAgent.OPTIM_OPTS[opt['optimizer']]
+            optim_class = StarspaceAgent.OPTIM_OPTS[opt['optimizer']]
             kwargs = {'lr': lr}
             if opt['optimizer'] == 'sgd':
                 kwargs['momentum'] = 0.95
@@ -148,7 +129,6 @@ class Seq2seqAgent(Agent):
                           'changed.')
                 else:
                     self.optimizer.load_state_dict(states['optimizer'])
-
         self.reset()
 
     def override_opt(self, new_opt):
@@ -182,20 +162,8 @@ class Seq2seqAgent(Agent):
             vec = vec.data
         new_vec = []
         for i in vec:
-            if i == self.END_IDX:
-                break
-            elif i != self.START_IDX:
-                new_vec.append(i)
+            new_vec.append(i)
         return self.dict.vec2txt(new_vec)
-
-    def cuda(self):
-        """Push parameters to the GPU."""
-        self.xs = self.xs.cuda(async=True)
-        self.ys = self.ys.cuda(async=True)
-        if self.rank:
-            self.cands = self.cands.cuda(async=True)
-        self.criterion.cuda()
-        self.model.cuda()
 
     def zero_grad(self):
         """Zero out optimizer."""
@@ -215,8 +183,6 @@ class Seq2seqAgent(Agent):
         shared = super().share()
         shared['answers'] = self.answers
         shared['dict'] = self.dict
-        shared['START_IDX'] = self.START_IDX
-        shared['END_IDX'] = self.END_IDX
         return shared
 
     def observe(self, observation):
@@ -239,18 +205,14 @@ class Seq2seqAgent(Agent):
                     if self.answers[batch_idx] is not None:
                         # use our last answer, which is the label during train
                         lastY = self.answers[batch_idx]
-                        y_utt = deque([self.START_IDX], maxlen=self.truncate)
-                        y_utt.extend(lastY)
-                        y_utt.append(self.END_IDX)
+                        y_utt = deque(lastY, maxlen=self.truncate)
                         self.history.append(y_utt)
                         self.answers[batch_idx] = None  # forget last y now
                     # remember past dialog of history_length utterances
                     dialog += (tok for utt in self.history for tok in utt)
 
                 # put START and END around text
-                parsed_x = deque([self.START_IDX], maxlen=self.truncate)
-                parsed_x.extend(self.parse(observation['text']))
-                parsed_x.append(self.END_IDX)
+                parsed_x = deque(self.parse(observation['text']), maxlen=self.truncate)
                 # add curr x to history
                 self.history.append(parsed_x)
 
@@ -262,34 +224,55 @@ class Seq2seqAgent(Agent):
 
         return observation
 
+
+    def report(self):
+        metrics = self.metrics
+        if metrics['total'] == 0:
+            report = { 'mean_rank': opt['neg_samples'] }
+        else:
+            report = { 'mean_rank': metrics['mean_rank'] / metrics['total'] }
+        return report
+
+    def reset_metrics(self):
+        self.metrics = { 'mean_rank':0, 'total':0 }
+
+    def update_metrics(self, scores):
+            # update metrics
+            pos = scores[0]
+            cnt = 0
+            for i in range(1, len(scores)):
+                if scores[i] >= pos:
+                    cnt += 1
+            self.metrics['mean_rank'] += cnt
+            self.metrics['total'] += 1
+
+
     def predict(self, xs, ys=None, cands=None, valid_cands=None, lm=False):
         """Produce a prediction from our model.
 
         Update the model using the targets if available, otherwise rank
         candidates as well if they are available and param is set.
         """
+
         is_training = ys is not None
         text_cand_inds, loss_dict = None, None
-        if is_training:
+        if is_training and len(self.ys_cache) > 0:
             self.model.train()
             self.zero_grad()
-            loss = 0
-            predictions, scores, _ = self.model(xs, ys)
-            for i in range(ys.size(1)):
-                # sum loss per-token
-                score = scores.select(1, i)
-                y = ys.select(1, i)
-                loss += self.criterion(score, y)
-            loss.backward()
+            pred = self.model(xs, ys, self.ys_cache)
+            pred = self.model(xs, ys, self.ys_cache)
+            loss = self.criterion(pred, Variable(torch.LongTensor([0])))
+            self.update_metrics(pred.data)
+            #loss.backward()
             self.update_params()
-            losskey = 'loss' if not lm else 'lmloss'
-            loss_dict = {losskey: loss.mul_(len(xs)).data[0]}
+            return [{}]
         else:
-            self.model.eval()
-            predictions, scores, text_cand_inds = self.model(xs, ys, cands,
-                                                             valid_cands)
+            return [{}]
+            #self.model.eval()
+            #predictions, scores, text_cand_inds = self.model(xs, ys, cands,
+            #                                                 valid_cands)
 
-        return predictions, text_cand_inds, loss_dict
+        return [{}]
 
     def batchify(self, observations, lm=False):
         """Convert a list of observations into input & target tensors."""
@@ -302,7 +285,7 @@ class Seq2seqAgent(Agent):
                                     enumerate(observations) if valid(ex)])
         except ValueError:
             # zero examples to process in this batch, so zip failed to unpack
-            return None, None, None, None, None, None
+            return None, None
 
         # set up the input tensors
         bsz = len(exs)
@@ -319,22 +302,11 @@ class Seq2seqAgent(Agent):
 
         labels_avail = any(['labels' in ex for ex in exs])
 
-        if lm:
-            self.xs.resize_(bsz, 1)
-            self.xs.fill_(self.START_IDX)
-            xs = Variable(self.xs)
-        else:
-            max_x_len = max([len(x) for x in parsed_x])
-            for x in parsed_x:
-                x += [self.NULL_IDX] * (max_x_len - len(x))
-            xs = torch.LongTensor(parsed_x)
-            if self.use_cuda:
-                # copy to gpu
-                self.xs.resize_(xs.size())
-                self.xs.copy_(xs, async=True)
-                xs = Variable(self.xs)
-            else:
-                xs = Variable(xs)
+        max_x_len = max([len(x) for x in parsed_x])
+        for x in parsed_x:
+            x += [[self.NULL_IDX]] * (max_x_len - len(x))
+        xs = torch.LongTensor(parsed_x)
+        xs = Variable(xs)
 
         # set up the target tensors
         ys = None
@@ -346,8 +318,6 @@ class Seq2seqAgent(Agent):
             parsed_y = [deque(maxlen=self.truncate) for _ in labels]
             for dq, y in zip(parsed_y, labels):
                 dq.extendleft(reversed(self.parse(y)))
-            for y in parsed_y:
-                y.append(self.END_IDX)
             if lm:
                 for x, y in zip(parsed_x, parsed_y):
                     if y.maxlen is not None:
@@ -358,51 +328,17 @@ class Seq2seqAgent(Agent):
             for y in parsed_y:
                 y += [self.NULL_IDX] * (max_y_len - len(y))
             ys = torch.LongTensor(parsed_y)
-            if self.use_cuda:
-                # copy to gpu
-                self.ys.resize_(ys.size())
-                self.ys.copy_(ys, async=True)
-                ys = Variable(self.ys)
-            else:
-                ys = Variable(ys)
+            ys = Variable(ys)
+        return xs, ys
 
-        # set up candidates
-        cands = None
-        valid_cands = None
-        if ys is None and self.rank:
-            # only do ranking when no targets available and ranking flag set
-            parsed_cs = []
-            valid_cands = []
-            for i, v in enumerate(valid_inds):
-                if 'label_candidates' in observations[v]:
-                    # each candidate tuple is a pair of the parsed version and
-                    # the original full string
-                    cs = list(observations[v]['label_candidates'])
-                    curr_dqs = [deque(maxlen=self.truncate) for _ in cs]
-                    for dq, c in zip(curr_dqs, cs):
-                        dq.extendleft(reversed(self.parse(c)))
-                    parsed_cs.append(curr_dqs)
-                    valid_cands.append((i, v, cs))
-            if len(parsed_cs) > 0:
-                # TODO: store lengths of cands separately, so don't have zero
-                #       padding for varying number of cands per example
-                # found cands, pack them into tensor
-                max_c_len = max(max(len(c) for c in cs) for cs in parsed_cs)
-                max_c_cnt = max(len(cs) for cs in parsed_cs)
-                for cs in parsed_cs:
-                    for c in cs:
-                        c += [self.NULL_IDX] * (max_c_len - len(c))
-                    cs += [self.NULL_IDX] * (max_c_cnt - len(cs))
-                cands = torch.LongTensor(parsed_cs)
-                if self.use_cuda:
-                    # copy to gpu
-                    self.cands.resize_(cands.size())
-                    self.cands.copy_(cands, async=True)
-                    cands = Variable(self.cands)
-                else:
-                    cands = Variable(cands)
-
-        return xs, ys, labels, valid_inds, cands, valid_cands
+    def add_to_ys_cache(self, ys):
+        if ys is None or len(ys) == 0:
+            return
+        if len(self.ys_cache) < self.ys_cache_sz:
+            self.ys_cache.append(copy.deepcopy(ys))
+        else:
+            ind = random.randint(0, self.ys_cache_sz - 1)
+            self.ys_cache[ind] = copy.deepcopy(ys)
 
     def batch_act(self, observations):
         batchsize = len(observations)
@@ -413,64 +349,9 @@ class Seq2seqAgent(Agent):
         # valid_inds tells us the indices of all valid examples
         # e.g. for input [{}, {'text': 'hello'}, {}, {}], valid_inds is [1]
         # since the other three elements had no 'text' field
-        xs, ys, labels, valid_inds, cands, valid_cands = self.batchify(observations)
-
-        if xs is None:
-            # no valid examples, just return empty responses
-            return batch_reply
-
-        if self.lm != 'none' and ys is not None:
-            # train on lm task: given [START], predict [x y]
-            # (regular task is given [x START] produce [y])
-            xs, ys, _, _, _, _ = self.batchify(observations, lm=True)
-            _, _, loss = self.predict(xs, ys, lm=True)
-            if loss is not None:
-                batch_reply[0]['metrics'] = loss
-
-        if self.lm != 'only' or ys is None:
-            # produce predictions, train on targets if availables
-            predictions, text_cand_inds, loss = self.predict(xs, ys, cands, valid_cands)
-            if loss is not None:
-                if 'metrics' in batch_reply[0]:
-                    for k, v in loss.items():
-                        batch_reply[0]['metrics'][k] = v
-                else:
-                    batch_reply[0]['metrics'] = loss
-
-            predictions = predictions.cpu()
-            for i in range(len(predictions)):
-                # map the predictions back to non-empty examples in the batch
-                # we join with spaces since we produce tokens one at a time
-                curr = batch_reply[valid_inds[i]]
-                output_tokens = []
-                for c in predictions.data[i]:
-                    if c == self.END_IDX:
-                        break
-                    else:
-                        output_tokens.append(c)
-                curr_pred = self.v2t(output_tokens)
-                curr['text'] = curr_pred
-                if labels is not None:
-                    y = []
-                    for c in ys.data[i]:
-                        if c == self.END_IDX:
-                            break
-                        else:
-                            y.append(c)
-                    self.answers[valid_inds[i]] = y
-                else:
-                    self.answers[valid_inds[i]] = output_tokens
-            if labels is None and random.random() > 0.2:
-                print('prediction: ', curr_pred)
-
-            if text_cand_inds is not None:
-                text_cand_inds = text_cand_inds.cpu().data
-                for i in range(len(valid_cands)):
-                    order = text_cand_inds[i]
-                    _, batch_idx, curr_cands = valid_cands[i]
-                    curr = batch_reply[batch_idx]
-                    curr['text_candidates'] = [curr_cands[idx] for idx in order
-                                               if idx < len(curr_cands)]
+        xs, ys = self.batchify(observations)
+        batch_reply = self.predict(xs, ys)
+        self.add_to_ys_cache(ys)
 
         return batch_reply
 
