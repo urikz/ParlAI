@@ -15,29 +15,38 @@ import torch.nn.functional as F
 class Starspace(nn.Module):
     def __init__(self, opt, num_features):
         super().__init__()
-        self.lt = nn.Embedding(num_features, opt['embeddingsize'], 0, sparse=True)
+        self.lt = nn.Embedding(num_features, opt['embeddingsize'], 0)
         self.opt = opt
         self.encoder = Encoder(self.lt)
 
+    def forward(self, xs, ys, cands):
+        self.sf = StarspaceF(self.encoder, cands).apply
+        return self.sf(xs, ys)
 
-    def forward(self, xs, ys=None, cands=None):
+class StarspaceF(Function):
+    def __init__(self, encoder, cands):
+        self.encoder = encoder
+        self.cands = cands
+
+    @staticmethod
+    def forward(ctx, xs, ys):
+        import pdb; pdb.set_trace()
         scores = None
-        if self.training:
-            xs_enc = self.encoder(xs)
-            ys_enc = self.encoder(ys)
-            scores = torch.matmul(xs_enc, ys_enc.t()) #
-            #scores = torch.dot(xs_enc[0], ys_enc[0])
-            c_scores = [scores]
-            for c in cands:
-                c_enc = self.encoder(c)
-                c_scores.append(torch.matmul(xs_enc, c_enc.t())) 
-                #c_scores.append(torch.dot(xs_enc[0], c_enc[0]))
-            scores = torch.cat(c_scores)
-        else:
-            error("ugh")
+        xs_enc = self.encoder(xs)
+        ys_enc = self.encoder(ys)
+        scores = torch.matmul(xs_enc, ys_enc.t())
+        c_scores = [scores]
+        for c in cands:
+            c_enc = self.encoder(c)
+            c_scores.append(torch.matmul(xs_enc, c_enc.t()))
+        scores = torch.cat(c_scores)
         scores =  scores.squeeze()
         pred = F.softmax(scores)
         return pred.unsqueeze(0)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+      import pdb; pdb.set_trace()
 
 class Encoder(nn.Module):
     def __init__(self, shared_lt):

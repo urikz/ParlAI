@@ -10,9 +10,10 @@ from .modules import Starspace
 
 import torch
 from torch.autograd import Variable
+import torch.autograd as autograd
 from torch import optim
 import torch.nn as nn
-
+import time
 from collections import deque
 
 import copy
@@ -72,6 +73,7 @@ class StarspaceAgent(Agent):
         self.reset_metrics()
         # all instances needs truncate param
         self.NULL_IDX = 0
+        self.start2=99;
         self.ys_cache = []
         self.ys_cache_sz = opt['neg_samples']
         self.truncate = opt['truncate'] if opt['truncate'] > 0 else None
@@ -119,9 +121,9 @@ class StarspaceAgent(Agent):
             lr = opt['learningrate']
             optim_class = StarspaceAgent.OPTIM_OPTS[opt['optimizer']]
             kwargs = {'lr': lr}
-            if opt['optimizer'] == 'sgd':
-                kwargs['momentum'] = 0.95
-                kwargs['nesterov'] = True
+#            if opt['optimizer'] == 'sgd':
+#                kwargs['momentum'] = 0.95
+#                kwargs['nesterov'] = True
             self.optimizer = optim_class(self.model.parameters(), **kwargs)
             if states:
                 if states['optimizer_type'] != opt['optimizer']:
@@ -230,13 +232,15 @@ class StarspaceAgent(Agent):
         if metrics['total'] == 0:
             report = { 'mean_rank': opt['neg_samples'] }
         else:
-            report = { 'mean_rank': metrics['mean_rank'] / metrics['total'] }
+            report = { 'mean_rank': metrics['mean_rank'] / metrics['total'],
+                       'mlp_time': metrics['mlp_time'] / metrics['total'],
+                       'tot_time': metrics['tot_time'] / metrics['total']}
         return report
 
     def reset_metrics(self):
-        self.metrics = { 'mean_rank':0, 'total':0 }
+        self.metrics = { 'mean_rank':0, 'total':0, 'mlp_time':0, 'tot_time':0 }
 
-    def update_metrics(self, scores):
+    def update_metrics(self, scores, mlp_time, non_mlp_time):
             # update metrics
             pos = scores[0]
             cnt = 0
@@ -246,6 +250,8 @@ class StarspaceAgent(Agent):
             self.metrics['mean_rank'] += cnt
             self.metrics['total'] += 1
 
+            self.metrics['mlp_time'] += mlp_time
+            self.metrics['tot_time'] += mlp_time + non_mlp_time
 
     def predict(self, xs, ys=None, cands=None, valid_cands=None, lm=False):
         """Produce a prediction from our model.
@@ -253,26 +259,50 @@ class StarspaceAgent(Agent):
         Update the model using the targets if available, otherwise rank
         candidates as well if they are available and param is set.
         """
+        self.start = time.time()
+        if True: #with autograd.profiler.profile() as p: 
+            is_training = ys is not None
+            text_cand_inds, loss_dict = None, None
+            if is_training and len(self.ys_cache) > 0:
+                self.model.train()
+                self.zero_grad()
+                pred = self.model(xs, ys, self.ys_cache)
+                loss = self.criterion(pred, Variable(torch.LongTensor([0])))
+                loss.backward()
+                self.update_params()
+            else:
+                return [{}]
+                #self.model.eval()
+                #predictions, scores, text_cand_inds = self.model(xs, ys, cands,
+                #                                                 valid_cands)
+        #print("********")
+        rest = 0
+        if self.start2 != 99:
+            rest = self.start-self.start2
+        self.start2 = time.time()
+        #print("model::" + str(self.start2-self.start) + "  rest:" + str(rest))
+        self.update_metrics(pred.data, self.start2-self.start, rest)
 
-        is_training = ys is not None
-        text_cand_inds, loss_dict = None, None
-        if is_training and len(self.ys_cache) > 0:
-            self.model.train()
-            self.zero_grad()
-            pred = self.model(xs, ys, self.ys_cache)
-            pred = self.model(xs, ys, self.ys_cache)
-            loss = self.criterion(pred, Variable(torch.LongTensor([0])))
-            self.update_metrics(pred.data)
-            loss.backward()
-            self.update_params()
-            return [{}]
-        else:
-            return [{}]
-            #self.model.eval()
-            #predictions, scores, text_cand_inds = self.model(xs, ys, cands,
-            #                                                 valid_cands)
-
+        #print(p.table())
+        #import pdb; pdb.set_trace()
         return [{}]
+
+# sparse True,  dot prod
+#[time:30s parleys:3995 ] {'mean_rank': 0.0, 'mlp_time': 0.009091309138706751, 'tot_time': 0.009531252724783761}
+#[ time:30s parleys:4335 ] {'mean_rank': 0.0, 'mlp_time': 0.00784910213751871, 'tot_time': 0.00819989306027772}
+
+# sparse True,  matmul
+#[ time:30s parleys:5356 ] {'mean_rank': 0.0, 'mlp_time': 0.006610582444082082, 'tot_time': 0.00694408548744492}
+#[ time:30s parleys:5588 ] {'mean_rank': 0.0, 'mlp_time': 0.006343643530658709, 'tot_time': 0.006658966755154125}
+
+#sparse=False
+#with backward:  model::0.40613722801208496  rest:0.0005350112915039062
+#w/o  backward:  model::0.0026650428771972656  rest:0.00032401084899902344
+
+#sparse=True
+#with backward:  model::0.006658077239990234  rest:0.00027108192443847656
+#w/o  backward:  model::0.002260923385620117  rest:0.0003902912139892578
+
 
     def batchify(self, observations, lm=False):
         """Convert a list of observations into input & target tensors."""
