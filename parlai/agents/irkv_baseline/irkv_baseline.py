@@ -3,17 +3,6 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree. An additional grant
 # of patent rights can be found in the PATENTS file in the same directory.
-#
-# Simple IR baselines.
-# We plan to implement the following variants:
-# Given an input message, either:
-# (i) find the most similar message in the (training) dataset and output the response from that exchange; or
-# (ii) find the most similar response to the input directly.
-# (iii) if label_candidates are provided, simply ranks them according to their similarity to the input message.
-# Currently only (iii) is used.
-#
-# Additonally, TFIDF is either used (requires building a dictionary) or not,
-# depending on whether you train on the train set first, or not.
 
 from parlai.core.agents import Agent
 from drqa import retriever
