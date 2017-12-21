@@ -15,7 +15,7 @@ import importlib.util
 
 from multiprocessing import Pool as ProcessPool
 from tqdm import tqdm
-from drqa.retriever import utils
+from . import utils
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -74,7 +74,7 @@ def get_contents(filename):
             try:
                 doc = json.loads(line)
             except json.decoder.JSONDecodeError:
-                # print('Error processing line, skipping it: ', line[:30], '...')
+                print('JSON error processing line, skipping it: ', line[:30], '...')
                 continue
             # Maybe preprocess the document with custom function
             if PREPROCESS_FN:
