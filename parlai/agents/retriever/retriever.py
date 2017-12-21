@@ -65,14 +65,18 @@ class RetrieverAgent(Agent):
     def __init__(self, opt, shared=None):
         super().__init__(opt)
         self.id = 'RetrieverAgent'
+
+        # we'll need to build the tfid if it's not already
+        build_tfidf = not os.path.exists(opt['retriever_tfidfpath'] + '.npz'):
         # sets up db
         if not os.path.exists(opt['retriever_dbpath']):
             build_db(opt['retriever_datapath'], opt['retriever_dbpath'],
                      opt['retriever_preprocesser'], opt['retriever_numworkers'])
-        self.db = retriever.get_class('sqlite')(
-            db_path=opt['retriever_dbpath'])
+            # we rebuilt the db, so need to force rebuilding of tfidf
+            build_tfidf = True
 
-        if not os.path.exists(opt['retriever_tfidfpath'] + '.npz'):
+        if build_tfidf:
+            # build tfidf if we built the db or if it doesn't exist
             build_tfidf(AttrDict({
                 'db_path': opt['retriever_dbpath'],
                 'out_dir': opt['retriever_tfidfpath'],
@@ -82,12 +86,11 @@ class RetrieverAgent(Agent):
                 'num_workers': opt['retriever_numworkers'],
             }))
 
+        self.db = retriever.get_class('sqlite')(
+            db_path=opt['retriever_dbpath'])
+
         self.ranker = retriever.get_class('tfidf')(
             tfidf_path=opt['retriever_tfidfpath'] + '.npz', strict=False)
-
-    # def observe(self, obs):
-    #     self.observation = obs
-    #     return obs
 
     def act(self):
         obs = self.observation
@@ -132,11 +135,3 @@ class RetrieverAgent(Agent):
                 reply['text'] = text
 
         return reply
-
-    # def save(self, fname=None):
-    #     fname = self.opt.get('model_file', None) if fname is None else fname
-    #     if fname:
-    #         self.dictionary.save(fname + '.dict')
-    #
-    # def load(self, fname):
-    #     self.dictionary.load(fname + '.dict')
