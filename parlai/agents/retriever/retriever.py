@@ -5,9 +5,10 @@
 # of patent rights can be found in the PATENTS file in the same directory.
 
 from parlai.core.agents import Agent
-from drqa import retriever
-from .retriever_scripts.build_db import store_contents as build_db
-from .retriever_scripts.build_tfidf import run as build_tfidf
+from .doc_db import DocDB
+from .tfidf_doc_ranker import TfidfDocRanker
+from .build_db import store_contents as build_db
+from .build_tfidf import run as build_tfidf
 from numpy.random import choice
 import math
 import os
@@ -67,15 +68,15 @@ class RetrieverAgent(Agent):
         self.id = 'RetrieverAgent'
 
         # we'll need to build the tfid if it's not already
-        build_tfidf = not os.path.exists(opt['retriever_tfidfpath'] + '.npz'):
+        rebuild_tfidf = not os.path.exists(opt['retriever_tfidfpath'] + '.npz')
         # sets up db
         if not os.path.exists(opt['retriever_dbpath']):
             build_db(opt['retriever_datapath'], opt['retriever_dbpath'],
                      opt['retriever_preprocesser'], opt['retriever_numworkers'])
             # we rebuilt the db, so need to force rebuilding of tfidf
-            build_tfidf = True
+            rebuild_tfidf = True
 
-        if build_tfidf:
+        if rebuild_tfidf:
             # build tfidf if we built the db or if it doesn't exist
             build_tfidf(AttrDict({
                 'db_path': opt['retriever_dbpath'],
@@ -86,10 +87,8 @@ class RetrieverAgent(Agent):
                 'num_workers': opt['retriever_numworkers'],
             }))
 
-        self.db = retriever.get_class('sqlite')(
-            db_path=opt['retriever_dbpath'])
-
-        self.ranker = retriever.get_class('tfidf')(
+        self.db = DocDB(db_path=opt['retriever_dbpath'])
+        self.ranker = TfidfDocRanker(
             tfidf_path=opt['retriever_tfidfpath'] + '.npz', strict=False)
 
     def act(self):

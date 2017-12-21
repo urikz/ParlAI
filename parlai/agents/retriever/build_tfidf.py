@@ -18,7 +18,8 @@ from multiprocessing.util import Finalize
 from functools import partial
 from collections import Counter
 
-from drqa import retriever
+from . import utils
+from .doc_db import DocDB
 from drqa import tokenizers
 
 logger = logging.getLogger()
@@ -38,11 +39,11 @@ PROCESS_TOK = None
 PROCESS_DB = None
 
 
-def init(tokenizer_class, db_class, db_opts):
+def init(tokenizer_class, db_opts):
     global PROCESS_TOK, PROCESS_DB
     PROCESS_TOK = tokenizer_class()
     Finalize(PROCESS_TOK, PROCESS_TOK.shutdown, exitpriority=100)
-    PROCESS_DB = db_class(**db_opts)
+    PROCESS_DB = DocDB(**db_opts)
     Finalize(PROCESS_DB, PROCESS_DB.close, exitpriority=100)
 
 
@@ -66,15 +67,15 @@ def count(ngram, hash_size, doc_id):
     global DOC2IDX
     row, col, data = [], [], []
     # Tokenize
-    tokens = tokenize(retriever.utils.normalize(fetch_text(doc_id)))
+    tokens = tokenize(utils.normalize(fetch_text(doc_id)))
 
     # Get ngrams from tokens, with stopword/punctuation filtering.
     ngrams = tokens.ngrams(
-        n=ngram, uncased=True, filter_fn=retriever.utils.filter_ngram
+        n=ngram, uncased=True, filter_fn=utils.filter_ngram
     )
 
     # Hash ngrams and count occurences
-    counts = Counter([retriever.utils.hash(gram, hash_size) for gram in ngrams])
+    counts = Counter([utils.hash(gram, hash_size) for gram in ngrams])
 
     # Return in sparse matrix data format.
     row.extend(counts.keys())
@@ -83,15 +84,14 @@ def count(ngram, hash_size, doc_id):
     return row, col, data
 
 
-def get_count_matrix(args, db, db_opts):
+def get_count_matrix(args, db_opts):
     """Form a sparse word to document count matrix (inverted index).
 
     M[i, j] = # times word i appears in document j.
     """
     # Map doc_ids to indexes
     global DOC2IDX
-    db_class = retriever.get_class(db)
-    with db_class(**db_opts) as doc_db:
+    with DocDB(**db_opts) as doc_db:
         doc_ids = doc_db.get_doc_ids()
     DOC2IDX = {doc_id: i for i, doc_id in enumerate(doc_ids)}
 
@@ -100,7 +100,7 @@ def get_count_matrix(args, db, db_opts):
     workers = ProcessPool(
         args.num_workers,
         initializer=init,
-        initargs=(tok_class, db_class, db_opts)
+        initargs=(tok_class, db_opts)
     )
 
     # Compute the count matrix in steps (to keep in memory)
@@ -163,7 +163,7 @@ def get_doc_freqs(cnts):
 def run(args):
     logging.info('Counting words...')
     count_matrix, doc_dict = get_count_matrix(
-        args, 'sqlite', {'db_path': args.db_path}
+        args, {'db_path': args.db_path}
     )
 
     logger.info('Making tfidf vectors...')
@@ -182,7 +182,7 @@ def run(args):
         'ngram': args.ngram,
         'doc_dict': doc_dict,
     }
-    retriever.utils.save_sparse_csr(filename, tfidf, metadata)
+    utils.save_sparse_csr(filename, tfidf, metadata)
 
 
 if __name__ == '__main__':
@@ -205,7 +205,7 @@ if __name__ == '__main__':
 
     logging.info('Counting words...')
     count_matrix, doc_dict = get_count_matrix(
-        args, 'sqlite', {'db_path': args.db_path}
+        args, {'db_path': args.db_path}
     )
 
     logger.info('Making tfidf vectors...')
@@ -227,4 +227,4 @@ if __name__ == '__main__':
         'ngram': args.ngram,
         'doc_dict': doc_dict
     }
-    retriever.utils.save_sparse_csr(filename, tfidf, metadata)
+    utils.save_sparse_csr(filename, tfidf, metadata)
