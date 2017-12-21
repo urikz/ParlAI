@@ -172,9 +172,6 @@ def run(args):
     logger.info('Getting word-doc frequencies...')
     freqs = get_doc_freqs(count_matrix)
 
-    # basename = os.path.splitext(os.path.basename(args.db_path))[0]
-    # basename += ('-tfidf-ngram=%d-hash=%d-tokenizer=%s' %
-    #              (args.ngram, args.hash_size, args.tokenizer))
     filename = args.out_dir
 
     logger.info('Saving to %s.npz' % filename)

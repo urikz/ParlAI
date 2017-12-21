@@ -59,13 +59,6 @@ def iter_files(path):
     elif os.path.isdir(path):
         for dirpath, _, filenames in os.walk(path):
             for f in filenames:
-                # join = os.path.join(dirpath, f)
-                # if os.path.isfile(join):
-                #     if f.endswith('.json'):
-                #         yield join
-                # else:
-                #     for pth in iter_files(join):
-                #         yield pth
                 yield os.path.join(dirpath, f)
     else:
         raise RuntimeError('Path %s is invalid' % path)
@@ -118,11 +111,11 @@ def store_contents(data_path, save_path, preprocess, num_workers=None):
     count = 0
     with tqdm(total=len(files)) as pbar:
         for triples in tqdm(workers.imap_unordered(get_contents, files)):
-            count += 1
-            triple_list = [(k,v[0],v[1]) for k, v in triples.items()]
+            count += len(triples)
+            triple_list = [(k, v[0], v[1]) for k, v in triples.items()]
             c.executemany("INSERT OR IGNORE INTO documents VALUES (?,?,?)", triple_list)
             pbar.update()
-    logger.info('Read %d docs.' % count)
+    logger.info('Read %d docs from %d files.' % (count, len(files)))
     logger.info('Committing...')
     conn.commit()
     conn.close()
