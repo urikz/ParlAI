@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
-# Copyright 2017-present, Facebook, Inc.
+# Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-"""A script to build the tf-idf document matrices for retrieval."""
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree. An additional grant
+# of patent rights can be found in the PATENTS file in the same directory.
+"""A script to build the tf-idf document matrices for retrieval.
+
+Adapted from Adam Fisch's work at github.com/facebookresearch/DrQA/
+"""
 
 import numpy as np
 import scipy.sparse as sp
@@ -161,6 +163,7 @@ def get_doc_freqs(cnts):
 
 
 def run(args):
+    # ParlAI version of run method, modified slightly
     logging.info('Counting words...')
     count_matrix, doc_dict = get_count_matrix(
         args, {'db_path': args.db_path}
@@ -186,6 +189,7 @@ def run(args):
 
 
 if __name__ == '__main__':
+    # not used in ParlAI but kept for reference
     parser = argparse.ArgumentParser()
     parser.add_argument('db_path', type=str, default=None,
                         help='Path to sqlite db holding document texts')

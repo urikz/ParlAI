@@ -37,18 +37,14 @@ class RetrieverAgent(Agent):
     def add_cmdline_args(parser):
         parser = parser.add_argument_group('Retriever Arguments')
         parser.add_argument(
-            '--retriever-datapath', type=str, required=True,
-            help='/path/to/data')
+            '--retriever-task', type=str, default=None,
+            help='ParlAI task to use to "train" retriever')
         parser.add_argument(
             '--retriever-dbpath', type=str, required=True,
             help='/path/to/saved/db.db')
         parser.add_argument(
             '--retriever-tfidfpath', type=str, required=True,
             help='Directory for saving output files')
-        parser.add_argument(
-            '--retriever-preprocesser', type=str, default=None,
-            help=('File path to a python module that defines '
-                  'a `preprocess` function'))
         parser.add_argument(
             '--retriever-numworkers', type=int, default=None,
             help='Number of CPU processes (for tokenizing, etc)')
@@ -71,10 +67,14 @@ class RetrieverAgent(Agent):
         rebuild_tfidf = not os.path.exists(opt['retriever_tfidfpath'] + '.npz')
         # sets up db
         if not os.path.exists(opt['retriever_dbpath']):
-            build_db(opt['retriever_datapath'], opt['retriever_dbpath'],
-                     opt['retriever_preprocesser'], opt['retriever_numworkers'])
+            if not opt.get('retriever_task'):
+                raise RuntimeError('Retriever task param required to build db')
+            build_db(opt, opt['retriever_task'], opt['retriever_dbpath'],
+                     context_length=opt.get('context_length', -1),
+                     include_labels=opt.get('include_labels', True))
             # we rebuilt the db, so need to force rebuilding of tfidf
             rebuild_tfidf = True
+
 
         if rebuild_tfidf:
             # build tfidf if we built the db or if it doesn't exist
@@ -91,6 +91,12 @@ class RetrieverAgent(Agent):
         self.ranker = TfidfDocRanker(
             tfidf_path=opt['retriever_tfidfpath'] + '.npz', strict=False)
 
+    def train(mode=True):
+        self.training = mode
+
+    def eval():
+        self.training = False
+
     def act(self):
         obs = self.observation
         reply = {}
@@ -99,6 +105,7 @@ class RetrieverAgent(Agent):
         if 'text' in obs:
             doc_ids, doc_scores = self.ranker.closest_docs(obs['text'], 30)
             total = sum(doc_scores)
+            import pdb; pdb.set_trace()
             if len(doc_ids) == 0:
                 reply['text'] = choice([
                     'Can you say something more interesting?',
