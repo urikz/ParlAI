@@ -74,8 +74,11 @@ STOPWORDS = {
 
 def normalize(text):
     """Resolve different type of unicode encodings."""
+<<<<<<< HEAD
     if type(text) != str:
         return text
+=======
+>>>>>>> e59f0d7f3652e6007ed329d2e5bef290d677c535
     return unicodedata.normalize('NFD', text)
 
 

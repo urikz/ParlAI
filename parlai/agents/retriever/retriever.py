@@ -16,7 +16,6 @@ import math
 import os
 
 
-
 class RetrieverAgent(Agent):
 
     @staticmethod
