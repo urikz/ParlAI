@@ -40,24 +40,17 @@ class TfidfDocRanker(object):
         self.hash_size = metadata['hash_size']
         self.tokenizer = tokenizers.get_class(metadata['tokenizer'])()
         self.doc_freqs = metadata['doc_freqs'].squeeze()
-        self.doc_dict = metadata['doc_dict']
-        self.num_docs = len(self.doc_dict[0])
+        self.num_docs = self.doc_mat.shape[1] - 1
         self.strict = strict
 
-    def get_doc_index(self, doc_id):
-        """Convert doc_id --> doc_index"""
-        return self.doc_dict[0][doc_id]
-
-    def get_doc_id(self, doc_index):
-        """Convert doc_index --> doc_id"""
-        return self.doc_dict[1][doc_index]
-
-    def closest_docs(self, query, k=1):
+    def closest_docs(self, query, k=1, matrix=None):
         """Closest docs by dot product between query and documents
         in tfidf weighted word vector space.
+
+        matrix arg can be provided to be used instead of internal doc matrix.
         """
         spvec = self.text2spvec(query)
-        res = spvec * self.doc_mat
+        res = spvec * matrix if matrix is not None else spvec * self.doc_mat
 
         if len(res.data) <= k:
             o_sort = np.argsort(-res.data)
@@ -66,7 +59,7 @@ class TfidfDocRanker(object):
             o_sort = o[np.argsort(-res.data[o])]
 
         doc_scores = res.data[o_sort]
-        doc_ids = [self.get_doc_id(i) for i in res.indices[o_sort]]
+        doc_ids = res.indices[o_sort]
         return doc_ids, doc_scores
 
     def batch_closest_docs(self, queries, k=1, num_workers=None):

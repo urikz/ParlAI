@@ -36,7 +36,6 @@ logger.addHandler(console)
 # Multiprocessing functions
 # ------------------------------------------------------------------------------
 
-DOC2IDX = None
 PROCESS_TOK = None
 PROCESS_DB = None
 
@@ -64,12 +63,29 @@ def tokenize(text):
 # ------------------------------------------------------------------------------
 
 
-def count(ngram, hash_size, doc_id):
-    """Fetch the text of a document and compute hashed ngrams counts."""
-    global DOC2IDX
+def live_count_matrix(args, cands):
+    global PROCESS_TOK
+    if PROCESS_TOK is None:
+        PROCESS_TOK = tokenizers.get_class(args.tokenizer)()
+    row, col, data = [], [], []
+    for i, c in enumerate(cands):
+        cur_row, cur_col, cur_data = count_text(args.ngram, args.hash_size, i, c)
+        row += cur_row
+        col += cur_col
+        data += cur_data
+
+    count_matrix = sp.csr_matrix(
+        (data, (row, col)), shape=(args.hash_size, len(cands))
+    )
+    count_matrix.sum_duplicates()
+    return count_matrix
+
+
+def count_text(ngram, hash_size, doc_id, text=None):
+    """Compute hashed ngram counts of text."""
     row, col, data = [], [], []
     # Tokenize
-    tokens = tokenize(utils.normalize(fetch_text(doc_id)))
+    tokens = tokenize(utils.normalize(text))
 
     # Get ngrams from tokens, with stopword/punctuation filtering.
     ngrams = tokens.ngrams(
@@ -81,9 +97,14 @@ def count(ngram, hash_size, doc_id):
 
     # Return in sparse matrix data format.
     row.extend(counts.keys())
-    col.extend([DOC2IDX[doc_id]] * len(counts))
+    col.extend([doc_id] * len(counts))
     data.extend(counts.values())
     return row, col, data
+
+
+def count(ngram, hash_size, doc_id):
+    """Fetch the text of a document and compute hashed ngrams counts."""
+    return count_text(ngram, hash_size, doc_id, text=fetch_text(doc_id))
 
 
 def get_count_matrix(args, db_opts):
@@ -91,11 +112,8 @@ def get_count_matrix(args, db_opts):
 
     M[i, j] = # times word i appears in document j.
     """
-    # Map doc_ids to indexes
-    global DOC2IDX
     with DocDB(**db_opts) as doc_db:
         doc_ids = doc_db.get_doc_ids()
-    DOC2IDX = {doc_id: i for i, doc_id in enumerate(doc_ids)}
 
     # Setup worker pool
     tok_class = tokenizers.get_class(args.tokenizer)
@@ -122,10 +140,10 @@ def get_count_matrix(args, db_opts):
 
     logger.info('Creating sparse matrix...')
     count_matrix = sp.csr_matrix(
-        (data, (row, col)), shape=(args.hash_size, len(doc_ids))
+        (data, (row, col)), shape=(args.hash_size, len(doc_ids) + 1)
     )
     count_matrix.sum_duplicates()
-    return count_matrix, (DOC2IDX, doc_ids)
+    return count_matrix
 
 
 # ------------------------------------------------------------------------------
@@ -165,9 +183,7 @@ def get_doc_freqs(cnts):
 def run(args):
     # ParlAI version of run method, modified slightly
     logging.info('Counting words...')
-    count_matrix, doc_dict = get_count_matrix(
-        args, {'db_path': args.db_path}
-    )
+    count_matrix = get_count_matrix(args, {'db_path': args.db_path})
 
     logger.info('Making tfidf vectors...')
     tfidf = get_tfidf_matrix(count_matrix)
@@ -183,7 +199,6 @@ def run(args):
         'tokenizer': args.tokenizer,
         'hash_size': args.hash_size,
         'ngram': args.ngram,
-        'doc_dict': doc_dict,
     }
     utils.save_sparse_csr(filename, tfidf, metadata)
 

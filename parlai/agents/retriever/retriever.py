@@ -5,30 +5,16 @@
 # of patent rights can be found in the PATENTS file in the same directory.
 
 from parlai.core.agents import Agent
+from parlai.core.utils import AttrDict
 from .doc_db import DocDB
 from .tfidf_doc_ranker import TfidfDocRanker
 from .build_db import store_contents as build_db
 from .build_tfidf import run as build_tfidf
+from .build_tfidf import live_count_matrix
 from numpy.random import choice
 import math
 import os
 
-
-# TODO: use parlai.core.utils.AttrDict
-class AttrDict(dict):
-    """Helper class to have a dict-like object with dot access.
-
-    For example, instead of `d = {'key': 'value'}` use
-    `d = AttrDict(key='value')`.
-    To access keys, instead of doing `d['key']` use `d.key`.
-
-    While this has some limitations on the possible keys (for example, do not
-    set the key `items` or you will lose access to the `items()` method), this
-    can make some code more clear.
-    """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.__dict__ = self
 
 
 class RetrieverAgent(Agent):
@@ -75,21 +61,23 @@ class RetrieverAgent(Agent):
             # we rebuilt the db, so need to force rebuilding of tfidf
             rebuild_tfidf = True
 
+        self.tfidf_args = AttrDict({
+            'db_path': opt['retriever_dbpath'],
+            'out_dir': opt['retriever_tfidfpath'],
+            'ngram': opt['retriever_ngram'],
+            'hash_size': opt['retriever_hashsize'],
+            'tokenizer': opt['retriever_tokenizer'],
+            'num_workers': opt['retriever_numworkers'],
+        })
 
         if rebuild_tfidf:
             # build tfidf if we built the db or if it doesn't exist
-            build_tfidf(AttrDict({
-                'db_path': opt['retriever_dbpath'],
-                'out_dir': opt['retriever_tfidfpath'],
-                'ngram': opt['retriever_ngram'],
-                'hash_size': opt['retriever_hashsize'],
-                'tokenizer': opt['retriever_tokenizer'],
-                'num_workers': opt['retriever_numworkers'],
-            }))
+            build_tfidf(self.tfidf_args)
 
         self.db = DocDB(db_path=opt['retriever_dbpath'])
         self.ranker = TfidfDocRanker(
             tfidf_path=opt['retriever_tfidfpath'] + '.npz', strict=False)
+        self.cands_hash = {}
 
     def train(mode=True):
         self.training = mode
@@ -103,9 +91,7 @@ class RetrieverAgent(Agent):
         reply['id'] = self.getID()
 
         if 'text' in obs:
-            doc_ids, doc_scores = self.ranker.closest_docs(obs['text'], 30)
-            total = sum(doc_scores)
-            import pdb; pdb.set_trace()
+            doc_ids, doc_scores = self.ranker.closest_docs(obs['text'], k=30)
             if len(doc_ids) == 0:
                 reply['text'] = choice([
                     'Can you say something more interesting?',
@@ -114,30 +100,47 @@ class RetrieverAgent(Agent):
                     'Can you expand on that?',
                 ])
             else:
-                doc_scores = [d / total for d in doc_scores]
-                pick = choice(doc_ids, p=doc_scores)
-                reply['text_candidates'] = [
-                    self.db.get_doc_value(did) for did in doc_ids]
-                text = self.db.get_doc_value(pick)
-                if len(text) > 100:
-                    # shrink it a bit so it's not too long to read
-                    idx = text.rfind('.', 10, 125)
-                    if idx > 0:
-                        text = text[:idx + 1]
-                    else:
-                        idx = text.rfind('?', 10, 125)
-                        if idx > 0:
-                            text = text[:idx + 1]
-                        else:
-                            idx = text.rfind('!', 10, 125)
-                            if idx > 0:
-                                text = text[:idx + 1]
-                            else:
-                                idx = text.rfind(' ', 0, 75)
-                                if idx > 0:
-                                    text = text[:idx]
-                                else:
-                                    text = text[:50]
-                reply['text'] = text
+                total = sum(doc_scores)
+                doc_probs = [d / total for d in doc_scores]
+
+                # rank candidates
+                if obs.get('label_candidates'):
+                    # these are better selection than stored facts
+                    cands = obs['label_candidates']
+                    cands_id = id(cands)
+                    if cands_id not in self.cands_hash:
+                        # cache candidate set
+                        # will not update if cand set changes contents
+                        c_list = list(cands)
+                        self.cands_hash[cands_id] = (live_count_matrix(self.tfidf_args, c_list), c_list)
+                    c_ids, c_scores = self.ranker.closest_docs(obs['text'], k=30, matrix=self.cands_hash[cands_id][0])
+                    picks = [self.cands_hash[cands_id][1][cid] for cid in c_ids]
+                else:
+                    picks = [self.db.get_doc_value(int(did)) for did in doc_ids]
+                reply['text_candidates'] = picks
+
+                # pick single choice
+                pick = int(choice(doc_ids, p=doc_probs))
+                reply['text'] = self.db.get_doc_value(pick)
 
         return reply
+
+# def shorten_text(text):
+#     idx = text.rfind('.', 10, 125)
+#     if idx > 0:
+#         text = text[:idx + 1]
+#     else:
+#         idx = text.rfind('?', 10, 125)
+#         if idx > 0:
+#             text = text[:idx + 1]
+#         else:
+#             idx = text.rfind('!', 10, 125)
+#             if idx > 0:
+#                 text = text[:idx + 1]
+#             else:
+#                 idx = text.rfind(' ', 0, 75)
+#                 if idx > 0:
+#                     text = text[:idx]
+#                 else:
+#                     text = text[:50]
+#     return text

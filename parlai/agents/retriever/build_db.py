@@ -20,6 +20,7 @@ from tqdm import tqdm
 from . import utils
 
 from collections import deque
+import random
 from parlai.core.agents import create_task_agent_from_taskname
 
 logger = logging.getLogger()
@@ -32,41 +33,6 @@ logger.addHandler(console)
 # ------------------------------------------------------------------------------
 # Store corpus.
 # ------------------------------------------------------------------------------
-
-
-# def iter_files(path):
-#     """Walk through all files located under a root path."""
-#     if os.path.isfile(path):
-#         yield path
-#     elif os.path.isdir(path):
-#         for dirpath, _, filenames in os.walk(path):
-#             for f in filenames:
-#                 yield os.path.join(dirpath, f)
-#     else:
-#         raise RuntimeError('Path %s is invalid' % path)
-#
-#
-# def get_contents(filename):
-#     """Parse the contents of a file. Each line is a JSON encoded document."""
-#     global PREPROCESS_FN
-#     documents = {}
-#     with open(filename) as f:
-#         for line in f:
-#             # Parse document
-#             try:
-#                 doc = json.loads(line)
-#             except json.decoder.JSONDecodeError:
-#                 print('JSON error processing line, skipping it: ', line[:30], '...')
-#                 continue
-#             # Maybe preprocess the document with custom function
-#             if PREPROCESS_FN:
-#                 doc = PREPROCESS_FN(doc)
-#             # Skip if it is empty or None
-#             if not doc:
-#                 continue
-#             # Add the document
-#             documents[doc['id']] = (doc['text'], doc.get('value'))
-#     return documents
 
 
 def store_contents(opt, task, save_path, context_length=-1, include_labels=True):
@@ -90,8 +56,8 @@ def store_contents(opt, task, save_path, context_length=-1, include_labels=True)
     ordered_opt['datatype'] = ':'.join([dt[0], 'ordered'] + dt[1:])
     ordered_opt['batchsize'] = 1
     ordered_opt['numthreads'] = 1
-    opt['task'] = task
-    teacher = create_task_agent_from_taskname(opt)[0]
+    ordered_opt['task'] = task
+    teacher = create_task_agent_from_taskname(ordered_opt)[0]
 
     episode_done = False
     current = []
@@ -106,7 +72,6 @@ def store_contents(opt, task, save_path, context_length=-1, include_labels=True)
                 current.append(action)
                 episode_done = action['episode_done']
 
-
             for ex in current:
                 if 'text' in ex:
                     text = ex['text']
@@ -120,6 +85,8 @@ def store_contents(opt, task, save_path, context_length=-1, include_labels=True)
                     label = random.choice(labels)
                     if include_labels:
                         context.append(label)
+                # use None for ID to auto-assign doc ids--we don't need to
+                # ever reverse-lookup them
                 triples.append((None, text, label))
 
             c.executemany('INSERT OR IGNORE INTO documents VALUES (?,?,?)',
@@ -128,6 +95,7 @@ def store_contents(opt, task, save_path, context_length=-1, include_labels=True)
 
             # reset flags and content
             episode_done = False
+            triples.clear()
             current.clear()
             context.clear()
 
