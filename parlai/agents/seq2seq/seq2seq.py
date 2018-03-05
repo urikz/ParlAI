@@ -263,7 +263,7 @@ class Seq2seqAgent(Agent):
                 self.cands = torch.LongTensor(1, 1, 1)
 
             # set up criteria
-            self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX)
+            self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX, size_average=False)
 
             if self.use_cuda:
                 # push to cuda
@@ -342,7 +342,7 @@ class Seq2seqAgent(Agent):
 
     def update_params(self):
         """Do one optimization step."""
-        torch.nn.utils.clip_grad_norm(self.model.parameters(), self.clip)
+        grad_norm = torch.nn.utils.clip_grad_norm(self.model.parameters(), self.clip)
         self.optimizer.step()
 
     def reset(self):
@@ -391,14 +391,19 @@ class Seq2seqAgent(Agent):
         candidates as well if they are available and param is set.
         """
         text_cand_inds, loss_dict = None, None
+        batch_size = xs.shape[0]
+        if ys is not None:
+            total_target_length = (ys != self.NULL_IDX).float().sum().data
         if is_training:
             self.model.train()
             self.zero_grad()
             predictions, scores, _ = self.model(xs, ys)
             loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
+            loss_scalar = loss.data[0] / total_target_length
+            loss = loss / batch_size
             loss.backward()
             self.update_params()
-            loss_dict = {'loss': loss.data[0], 'ppl': (math.e**loss).data[0]}
+            loss_dict = {'loss': loss_scalar, 'ppl': (math.e**loss_scalar)}
         else:
             self.model.eval()
             predictions, _scores, text_cand_inds = self.model(
@@ -408,7 +413,8 @@ class Seq2seqAgent(Agent):
                 # calculate loss on targets
                 _, scores, _ = self.model(xs, ys)
                 loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
-                loss_dict = {'loss': loss.data[0], 'ppl': (math.e**loss).data[0]}
+                loss_scalar = loss.data[0] / total_target_length
+                loss_dict = {'loss': loss_scalar, 'ppl': (math.e**loss_scalar)}
 
         return predictions, text_cand_inds, loss_dict
 
@@ -503,7 +509,7 @@ class Seq2seqAgent(Agent):
         if is_training:
             report_freq = 0
         else:
-            report_freq = 0.01
+            report_freq = 0
         PaddingUtils.map_predictions(
             predictions.cpu().data, valid_inds, batch_reply, observations,
             self.dict, self.END_IDX, report_freq=report_freq, labels=labels,

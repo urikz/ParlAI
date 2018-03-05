@@ -205,17 +205,8 @@ class Decoder(nn.Module):
         self.rnn = rnn_class(emb_size, hidden_size, num_layers,
                              dropout=dropout, batch_first=True)
 
-        # rnn output to embedding
-        if hidden_size != emb_size:
-            self.o2e = RandomProjection(hidden_size, emb_size)
-            # other option here is to learn these weights
-            # self.o2e = nn.Linear(hidden_size, emb_size, bias=False)
-        else:
-            # no need for any transformation here
-            self.o2e = lambda x: x
-        # embedding to scores, use custom linear to possibly share weights
         shared_weight = self.lt.weight if share_output else None
-        self.e2s = Linear(emb_size, num_features, bias=False,
+        self.e2s = Linear(hidden_size, num_features, bias=True,
                           shared_weight=shared_weight)
         self.shared = shared_weight is not None
 
@@ -239,8 +230,7 @@ class Decoder(nn.Module):
         if self.attn_time == 'post':
             output = self.attention(output, new_hidden, encoder_output, attn_mask)
 
-        e = F.dropout(self.o2e(output), p=self.dropout, training=self.training)
-        scores = F.dropout(self.e2s(e), p=self.dropout, training=self.training)
+        scores = F.dropout(self.e2s(output), p=self.dropout, training=self.training)
         # select top scoring index, excluding the padding symbol (at idx zero)
         _max_score, idx = scores.narrow(2, 1, scores.size(2) - 1).max(2)
         preds = idx.add_(1)
