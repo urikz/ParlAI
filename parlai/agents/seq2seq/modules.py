@@ -230,7 +230,7 @@ class Decoder(nn.Module):
         if self.attn_time == 'post':
             output = self.attention(output, new_hidden, encoder_output, attn_mask)
 
-        scores = F.dropout(self.e2s(output), p=self.dropout, training=self.training)
+        scores = self.e2s(output)
         # select top scoring index, excluding the padding symbol (at idx zero)
         _max_score, idx = scores.narrow(2, 1, scores.size(2) - 1).max(2)
         preds = idx.add_(1)

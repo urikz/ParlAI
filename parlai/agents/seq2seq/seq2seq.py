@@ -277,9 +277,6 @@ class Seq2seqAgent(Agent):
             lr = opt['learningrate']
             optim_class = Seq2seqAgent.OPTIM_OPTS[opt['optimizer']]
             kwargs = {'lr': lr}
-            if opt['optimizer'] == 'sgd':
-                kwargs['momentum'] = 0.95
-                kwargs['nesterov'] = True
 
             if opt['embedding_type'].endswith('fixed'):
                 print('Seq2seq: fixing embedding weights.')
