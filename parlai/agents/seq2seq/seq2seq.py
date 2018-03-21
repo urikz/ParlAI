@@ -284,9 +284,6 @@ class Seq2seqAgent(Agent):
             lr = opt['learningrate']
             optim_class = Seq2seqAgent.OPTIM_OPTS[opt['optimizer']]
             kwargs = {'lr': lr}
-            if opt['optimizer'] == 'sgd':
-                kwargs['momentum'] = 0.95
-                kwargs['nesterov'] = True
 
             if opt['embedding_type'].endswith('fixed'):
                 print('Seq2seq: fixing embedding weights.')
@@ -302,7 +299,7 @@ class Seq2seqAgent(Agent):
                 else:
                     self.optimizer.load_state_dict(states['optimizer'])
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizer, 'min', factor=0.5, patience=3, verbose=True)
+                self.optimizer, 'min', factor=0.25, patience=0, verbose=True)
 
         self.reset()
 
@@ -426,6 +423,8 @@ class Seq2seqAgent(Agent):
         candidates as well if they are available and param is set.
         """
         text_cand_inds, loss_dict = None, None
+        batch_size = xs.shape[0]
+        assert batch_size > 1
         if is_training:
             self.model.train()
             self.zero_grad()
@@ -436,7 +435,7 @@ class Seq2seqAgent(Agent):
             self.metrics['loss'] += loss.double().data[0]
             self.metrics['num_tokens'] += target_tokens
             # average loss per token
-            loss /= target_tokens
+            loss /= batch_size
             loss.backward()
             self.update_params()
         else:
@@ -538,7 +537,7 @@ class Seq2seqAgent(Agent):
         if is_training:
             report_freq = 0
         else:
-            report_freq = 0.01
+            report_freq = 0
         PaddingUtils.map_predictions(
             predictions.cpu().data, valid_inds, batch_reply, observations,
             self.dict, self.END_IDX, report_freq=report_freq, labels=labels,
